@@ -8,6 +8,8 @@ use Firebase\Auth\Token\Domain\Generator as TokenGenerator;
 use Firebase\Auth\Token\Domain\Verifier;
 use Firebase\Auth\Token\Exception\InvalidToken;
 use GuzzleHttp\ClientInterface;
+use GuzzleHttp\Exception\GuzzleException;
+use GuzzleHttp\Exception\RequestException;
 use Kreait\Firebase\Auth\ActionCodeSettings;
 use Kreait\Firebase\Auth\ActionCodeSettings\ValidatedActionCodeSettings;
 use Kreait\Firebase\Auth\ApiClient;
@@ -29,11 +31,10 @@ use Kreait\Firebase\Auth\SignInWithIdpCredentials;
 use Kreait\Firebase\Auth\SignInWithRefreshToken;
 use Kreait\Firebase\Auth\TenantId;
 use Kreait\Firebase\Auth\UserRecord;
-use Kreait\Firebase\Exception\Auth\AuthError;
 use Kreait\Firebase\Exception\Auth\RevokedIdToken;
 use Kreait\Firebase\Exception\Auth\UserNotFound;
+use Kreait\Firebase\Exception\AuthException;
 use Kreait\Firebase\Exception\InvalidArgumentException;
-use Kreait\Firebase\Project\ProjectId;
 use Kreait\Firebase\Util\Deprecation;
 use Kreait\Firebase\Util\DT;
 use Kreait\Firebase\Util\JSON;
@@ -57,7 +58,6 @@ class Auth implements Contract\Auth
     private Verifier $idTokenVerifier;
     private SignInHandler $signInHandler;
     private ?TenantId $tenantId;
-    private ?ProjectId $projectId;
 
     /**
      * @internal
@@ -68,8 +68,7 @@ class Auth implements Contract\Auth
         TokenGenerator $tokenGenerator,
         Verifier $idTokenVerifier,
         SignInHandler $signInHandler,
-        ?TenantId $tenantId = null,
-        ?ProjectId $projectId = null
+        ?TenantId $tenantId = null
     ) {
         $this->client = $apiClient;
         $this->httpClient = $httpClient;
@@ -77,7 +76,6 @@ class Auth implements Contract\Auth
         $this->idTokenVerifier = $idTokenVerifier;
         $this->signInHandler = $signInHandler;
         $this->tenantId = $tenantId;
-        $this->projectId = $projectId;
     }
 
     public function getUser($uid): UserRecord
@@ -235,17 +233,11 @@ class Auth implements Contract\Auth
 
     public function deleteUsers(iterable $uids, bool $forceDeleteEnabledUsers = false): DeleteUsersResult
     {
-        if (!$this->projectId) {
-            throw AuthError::missingProjectId('Batch user deletion cannot be performed.');
-        }
-
-        $request = DeleteUsersRequest::withUids($this->projectId->value(), $uids, $forceDeleteEnabledUsers);
+        $request = DeleteUsersRequest::withUids($uids, $forceDeleteEnabledUsers);
 
         $response = $this->client->deleteUsers(
-            $request->projectId(),
             $request->uids(),
-            $request->enabledUsersShouldBeForceDeleted(),
-            $this->tenantId ? $this->tenantId->toString() : null
+            $request->enabledUsersShouldBeForceDeleted()
         );
 
         return DeleteUsersResult::fromRequestAndResponse($request, $response);
@@ -282,9 +274,7 @@ class Auth implements Contract\Auth
                 : ValidatedActionCodeSettings::fromArray($actionCodeSettings);
         }
 
-        $tenantId = $this->tenantId ? $this->tenantId->toString() : null;
-
-        $createAction = CreateActionLink::new($type, $email, $actionCodeSettings, $tenantId);
+        $createAction = CreateActionLink::new($type, $email, $actionCodeSettings);
         $sendAction = new SendActionLink($createAction, $locale);
 
         if (\mb_strtolower($type) === 'verify_email') {
@@ -313,7 +303,15 @@ class Auth implements Contract\Auth
             $sendAction = $sendAction->withIdTokenString($idToken);
         }
 
-        (new SendActionLink\GuzzleApiClientHandler($this->httpClient))->handle($sendAction);
+        try {
+            $this->client->sendActionLink($sendAction);
+        } catch (AuthException $e) {
+            if (($previous = $e->getPrevious()) && ($previous instanceof RequestException) && ($response = $previous->getResponse())) {
+                throw FailedToSendActionLink::withActionAndResponse($sendAction, $response);
+            }
+
+            throw new FailedToSendActionLink('Failed to send action link: '.$e->getMessage(), $e->getCode(), $e);
+        }
     }
 
     public function getEmailVerificationLink($email, $actionCodeSettings = null): string
@@ -432,7 +430,7 @@ class Auth implements Contract\Auth
 
             $validSinceWithLeeway = DT::toUTCDateTimeImmutable($validSince)->modify('-'.$leewayInSeconds.' seconds');
 
-            if ($tokenAuthenticatedAtWithLeeway < $validSinceWithLeeway) {
+            if ($tokenAuthenticatedAtWithLeeway->getTimestamp() < $validSinceWithLeeway->getTimestamp()) {
                 throw new RevokedIdToken($verifiedToken);
             }
         }
@@ -675,7 +673,8 @@ class Auth implements Contract\Auth
      */
     private function getUserRecordFromResponse(ResponseInterface $response): UserRecord
     {
-        $uid = JSON::decode((string) $response->getBody(), true)['localId'];
+        $data =JSON::decode((string) $response->getBody(), true);
+        $uid = $data['localId'];
 
         return $this->getUser($uid);
     }

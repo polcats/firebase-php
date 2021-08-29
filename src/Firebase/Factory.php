@@ -418,17 +418,18 @@ class Factory
     {
         $projectId = $this->getProjectId();
         $tenantId = $this->tenantId;
+        $emulatorHost = Util::getenv('FIREBASE_AUTH_EMULATOR_HOST');
 
         $httpClient = $this->createApiClient([
             'base_uri' => 'https://www.googleapis.com/identitytoolkit/v3/relyingparty/',
         ]);
 
-        $authApiClient = new Auth\ApiClient($httpClient, $tenantId);
+        $authApiClient = new Auth\ApiClient($httpClient, $tenantId, $projectId, $emulatorHost);
         $customTokenGenerator = $this->createCustomTokenGenerator();
         $idTokenVerifier = $this->createIdTokenVerifier();
         $signInHandler = new Firebase\Auth\SignIn\GuzzleHandler($httpClient);
 
-        return new Auth($authApiClient, $httpClient, $customTokenGenerator, $idTokenVerifier, $signInHandler, $tenantId, $projectId);
+        return new Auth($authApiClient, $httpClient, $customTokenGenerator, $idTokenVerifier, $signInHandler, $tenantId);
     }
 
     public function createCustomTokenGenerator(): Generator

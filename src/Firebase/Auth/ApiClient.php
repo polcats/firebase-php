@@ -5,6 +5,9 @@ declare(strict_types=1);
 namespace Kreait\Firebase\Auth;
 
 use GuzzleHttp\ClientInterface;
+use GuzzleHttp\Psr7\Query;
+use GuzzleHttp\Psr7\Utils;
+use Kreait\Firebase\Exception\Auth\AuthError;
 use Kreait\Firebase\Exception\Auth\EmailNotFound;
 use Kreait\Firebase\Exception\Auth\ExpiredOobCode;
 use Kreait\Firebase\Exception\Auth\InvalidOobCode;
@@ -12,10 +15,13 @@ use Kreait\Firebase\Exception\Auth\OperationNotAllowed;
 use Kreait\Firebase\Exception\Auth\UserDisabled;
 use Kreait\Firebase\Exception\AuthApiExceptionConverter;
 use Kreait\Firebase\Exception\AuthException;
+use Kreait\Firebase\Project\ProjectId;
 use Kreait\Firebase\Request;
 use Kreait\Firebase\Util\JSON;
 use Kreait\Firebase\Value\Provider;
+use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
+use Psr\Http\Message\StreamInterface;
 use Throwable;
 
 /**
@@ -23,19 +29,60 @@ use Throwable;
  */
 class ApiClient
 {
+    private const LEGACY_URL = 'https://www.googleapis.com/identitytoolkit/v3/relyingparty';
+
+    private const PROJECTLESS_URL_FORMAT = 'https://identitytoolkit.googleapis.com/{version}{api}';
+
+    private const URL_FORMAT = 'https://identitytoolkit.googleapis.com/{version}/projects/{projectId}{api}';
+    private const TENANT_URL_FORMAT = 'https://identitytoolkit.googleapis.com/{version}/projects/{projectId}/tenants/{tenantId}{api}';
+
+    private const EMULATOR_URL_FORMAT = 'http://{host}/identitytoolkit.googleapis.com/{version}/projects/{projectId}{api}';
+    private const EMULATOR_TENANT_URL_FORMAT = 'http://{host}/identitytoolkit.googleapis.com/{version}/projects/{projectId}/tenants/{tenantId}{api}';
+
     private ClientInterface $client;
     private ?TenantId $tenantId;
 
     private AuthApiExceptionConverter $errorHandler;
+    private ?ProjectId $projectId;
+    private string $baseUrlFormat;
 
     /**
      * @internal
      */
-    public function __construct(ClientInterface $client, ?TenantId $tenantId = null)
-    {
+    public function __construct(
+        ClientInterface $client,
+        ?TenantId $tenantId = null,
+        ?ProjectId $projectId = null,
+        ?string $emulatorHost = null
+    ) {
+        $projectId = null;
         $this->client = $client;
         $this->tenantId = $tenantId;
+        $this->projectId = $projectId;
+
+        $this->baseUrlFormat = $this->determineBaseUrl($projectId, $tenantId, $emulatorHost);
         $this->errorHandler = new AuthApiExceptionConverter();
+    }
+
+    private function determineBaseUrl(?ProjectId $projectId, ?TenantId $tenantId, ?string $emulatorHost): string
+    {
+        if ($projectId && $emulatorHost && $tenantId) {
+            $urlFormat = self::EMULATOR_TENANT_URL_FORMAT;
+        } elseif ($projectId && $emulatorHost) {
+            $urlFormat = self::EMULATOR_URL_FORMAT;
+        } elseif ($projectId && $tenantId) {
+            $urlFormat = self::TENANT_URL_FORMAT;
+        } elseif ($projectId) {
+            $urlFormat = self::URL_FORMAT;
+        } else {
+            $urlFormat = self::PROJECTLESS_URL_FORMAT;
+        }
+
+        return \strtr($urlFormat, [
+            '{host}' => $emulatorHost ?: '',
+            '{projectId}' => $projectId ? $projectId->value() : '',
+            '{tenantId}' => $tenantId ? $tenantId->toString() : '',
+        ]);
     }
 
     /**
@@ -43,7 +90,21 @@ class ApiClient
      */
     public function createUser(Request\CreateUser $request): ResponseInterface
     {
-        return $this->requestApi('signupNewUser', $request->jsonSerialize());
+        $params = $request->jsonSerialize();
+
+        if ($this->projectId) {
+            $apiRequest = $this->createRequest('POST', '/accounts');
+        } else {
+            $apiRequest = $this->createProjectLessRequest('POST', '/accounts:signUp');
+            if ($this->tenantId) {
+                $params['tenantId'] = $this->tenantId->toString();
+            }
+        }
+
+        $apiRequest = $apiRequest
+            ->withBody(Utils::streamFor(JSON::encode((object) $params, JSON_FORCE_OBJECT)));
+
+        return $this->request($apiRequest);
     }
 
     /**
@@ -51,7 +112,10 @@ class ApiClient
      */
     public function updateUser(Request\UpdateUser $request): ResponseInterface
     {
-        return $this->requestApi('setAccountInfo', $request->jsonSerialize());
+        $apiRequest = $this->createRequest('POST', '/accounts:update')
+            ->withBody(Utils::streamFor(JSON::encode((object) $request->jsonSerialize())));
+
+        return $this->request($apiRequest);
     }
 
     /**
@@ -61,10 +125,15 @@ class ApiClient
      */
     public function setCustomUserClaims(string $uid, array $claims): ResponseInterface
     {
-        return $this->requestApi('https://identitytoolkit.googleapis.com/v1/accounts:update', [
+        $json = JSON::encode([
             'localId' => $uid,
             'customAttributes' => JSON::encode($claims, JSON_FORCE_OBJECT),
         ]);
+
+        $apiRequest = $this->createRequest('POST','/accounts:update')
+            ->withBody(Utils::streamFor($json));
+
+        return $this->request($apiRequest);
     }
 
     /**
@@ -75,9 +144,15 @@ class ApiClient
      */
     public function getUserByEmail(string $email): ResponseInterface
     {
-        return $this->requestApi('getAccountInfo', [
+        $apiRequest = $this->createRequest('POST', '/accounts:lookup');
+
+        $data = JSON::encode([
             'email' => [$email],
         ]);
+
+        $apiRequest = $apiRequest->withBody(Utils::streamFor($data));
+
+        return $this->request($apiRequest);
     }
 
     /**
@@ -85,9 +160,15 @@ class ApiClient
      */
     public function getUserByPhoneNumber(string $phoneNumber): ResponseInterface
     {
-        return $this->requestApi('getAccountInfo', [
+        $apiRequest = $this->createRequest('POST', '/accounts:lookup');
+
+        $data = JSON::encode([
             'phoneNumber' => [$phoneNumber],
         ]);
+
+        $apiRequest = $apiRequest->withBody(Utils::streamFor($data));
+
+        return $this->request($apiRequest);
     }
 
     /**
@@ -97,10 +178,21 @@ class ApiClient
     {
         $batchSize = $batchSize ?? 1000;
 
-        return $this->requestApi('downloadAccount', \array_filter([
+        $params = [
             'maxResults' => $batchSize,
             'nextPageToken' => $nextPageToken,
-        ]));
+        ];
+
+        if (!$this->projectId) {
+            return $this->requestApi(self::LEGACY_URL.'/downloadAccount', \array_filter([
+                'maxResults' => $batchSize,
+                'nextPageToken' => $nextPageToken,
+            ]));
+        }
+
+        $apiRequest = $this->createRequest('GET', '/accounts:batchGet?'.Query::build($params));
+
+        return $this->request($apiRequest);
     }
 
     /**
@@ -108,9 +200,23 @@ class ApiClient
      */
     public function deleteUser(string $uid): ResponseInterface
     {
-        return $this->requestApi('deleteAccount', [
-            'localId' => $uid,
-        ]);
+        $params = ['localId' => $uid];
+
+        if ($this->projectId) {
+            $apiRequest = $this->createRequest('POST', '/accounts:delete');
+        } else {
+            if ($this->tenantId) {
+                $params['tenantId'] = $this->tenantId->toString();
+            }
+
+            $apiRequest = $this->createProjectLessRequest('POST', '/accounts:delete');
+        }
+
+        $params = JSON::encode($params);
+
+        $apiRequest = $apiRequest->withBody(Utils::streamFor($params));
+
+        return $this->request($apiRequest);
     }
 
     /**
@@ -118,20 +224,19 @@ class ApiClient
      *
      * @throws AuthException
      */
-    public function deleteUsers(string $projectId, array $uids, bool $forceDeleteEnabledUsers, ?string $tenantId = null): ResponseInterface
+    public function deleteUsers(array $uids, bool $forceDeleteEnabledUsers): ResponseInterface
     {
-        $data = [
-            'localIds' => $uids,
-            'force' => $forceDeleteEnabledUsers,
-        ];
-
-        if ($tenantId) {
-            $data['tenantId'] = $tenantId;
+        if (!$this->projectId) {
+            throw AuthError::missingProjectId('Batch user deletion cannot be performed.');
         }
 
-        return $this->requestApi(
-            "https://identitytoolkit.googleapis.com/v1/projects/{$projectId}/accounts:batchDelete",
-            $data
+        $params = JSON::encode([
+            'localIds' => $uids,
+            'force' => $forceDeleteEnabledUsers,
+        ]);
+
+        return $this->request(
+            $this->createRequest('POST', '/accounts:batchDelete')->withBody(Utils::streamFor($params))
         );
     }
 
@@ -142,13 +247,21 @@ class ApiClient
      */
     public function getAccountInfo($uids): ResponseInterface
     {
-        if (!\is_array($uids)) {
-            $uids = [$uids];
+        $params = [
+            'localId' => is_array($uids) ? $uids : [$uids],
+        ];
+
+        if ($this->projectId) {
+            $apiRequest = $this->createRequest('POST', '/accounts:lookup');
+        } else {
+            return $this->requestApi(self::LEGACY_URL.'/getAccountInfo', $params);
         }
 
-        return $this->requestApi('getAccountInfo', [
-            'localId' => $uids,
-        ]);
+        $data = JSON::encode($params);
+
+        $apiRequest = $apiRequest->withBody(Utils::streamFor($data));
+
+        return $this->request($apiRequest);
     }
 
     /**
@@ -159,9 +272,12 @@ class ApiClient
      */
     public function verifyPasswordResetCode(string $oobCode): ResponseInterface
     {
-        return $this->requestApi('resetPassword', [
-            'oobCode' => $oobCode,
-        ]);
+        $params = JSON::encode(['oobCode' => $oobCode]);
+
+        $apiRequest = $this->createProjectLessRequest('POST', '/accounts:resetPassword')
+            ->withBody(Utils::streamFor($params));
+
+        return $this->request($apiRequest);
     }
 
     /**
@@ -173,10 +289,15 @@ class ApiClient
      */
     public function confirmPasswordReset(string $oobCode, string $newPassword): ResponseInterface
     {
-        return $this->requestApi('resetPassword', [
+        $params = JSON::encode([
             'oobCode' => $oobCode,
             'newPassword' => $newPassword,
         ]);
+
+        $apiRequest = $this->createProjectLessRequest('POST', '/accounts:resetPassword')
+            ->withBody(Utils::streamFor($params));
+
+        return $this->request($apiRequest);
     }
 
     /**
@@ -184,10 +305,15 @@ class ApiClient
      */
     public function revokeRefreshTokens(string $uid): ResponseInterface
     {
-        return $this->requestApi('setAccountInfo', [
+        $params = JSON::encode([
             'localId' => $uid,
             'validSince' => \time(),
         ]);
+
+        $apiRequest = $this->createRequest('POST', '/accounts:update')
+            ->withBody(Utils::streamFor($params));
+
+        return $this->request($apiRequest);
     }
 
     /**
@@ -197,10 +323,38 @@ class ApiClient
      */
     public function unlinkProvider(string $uid, array $providers): ResponseInterface
     {
-        return $this->requestApi('setAccountInfo', [
+        return $this->requestApi(self::LEGACY_URL.'/setAccountInfo', [
             'localId' => $uid,
             'deleteProvider' => $providers,
         ]);
+    }
+
+    /**
+     * @throws AuthException
+     */
+    public function sendActionLink(SendActionLink $action): ResponseInterface
+    {
+        $params = [
+            'requestType' => $action->type(),
+            'email' => $action->email(),
+        ] + $action->settings()->toArray();
+
+        if (!$this->projectId && $this->tenantId) {
+            $params['tenantId'] = $this->tenantId->toString();
+        }
+
+        if ($idTokenString = $action->idTokenString()) {
+            $params['idToken'] = $idTokenString;
+        }
+
+        $request = $this->createRequest('POST', '/accounts:sendOobCode')
+            ->withBody(Utils::streamFor(JSON::encode($params)));
+
+        if ($locale = $action->locale()) {
+            $request = $request->withHeader('X-Firebase-Locale', $locale);
+        }
+
+        return $this->request($request);
     }
 
     /**
@@ -222,8 +376,44 @@ class ApiClient
             $options['json'] = $data;
         }
 
+        return $this->request(new \GuzzleHttp\Psr7\Request('POST', $uri), $options);
+    }
+
+    private function createRequest(string $method, string $api, ?string $version = null): RequestInterface
+    {
+        $url = strtr($this->baseUrlFormat, [
+            '{version}' => $version ?? 'v1',
+            '{api}' => $api,
+        ]);
+
+        return (new \GuzzleHttp\Psr7\Request($method, $url))
+            ->withHeader('Accept', 'application/json')
+            ->withHeader('Content-Type', 'application/json; charset=UTF-8');
+    }
+
+    private function createProjectLessRequest(string $method, string $api, ?string $version = null): RequestInterface
+    {
+        $url = strtr(self::PROJECTLESS_URL_FORMAT, [
+            '{version}' => $version ?? 'v1',
+            '{api}' => $api,
+        ]);
+
+        return (new \GuzzleHttp\Psr7\Request($method, $url))
+            ->withHeader('Accept', 'application/json')
+            ->withHeader('Content-Type', 'application/json; charset=UTF-8');
+    }
+
+    /**
+     * @param array<string, mixed>|null $options
+     *
+     * @throws AuthException
+     */
+    private function request(RequestInterface $request, ?array $options = null): ResponseInterface
+    {
+        $options = $options ?? [];
+
         try {
-            return $this->client->request('POST', $uri, $options);
+            return $this->client->send($request, $options);
         } catch (Throwable $e) {
             throw $this->errorHandler->convertException($e);
         }
