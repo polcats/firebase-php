@@ -4,6 +4,9 @@
 ### Added
 * Added `Factory::getDebugInfo()` to display information about the currently configured factory.
   ([Documentation](https://firebase-php.readthedocs.io/en/latest/troubleshooting.html#debugging))
+* Added support for providing a nonce when signing in with IdP credentials
+* Added methods:
+    * `Kreait\Firebase\Auth::signInWithAppleIdToken()`
 
 ## [5.23.0] - 2021-08-26
 ### Added

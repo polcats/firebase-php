@@ -599,7 +599,12 @@ class Auth implements Contract\Auth
         return $this->signInWithIdpAccessToken(Provider::FACEBOOK, $accessToken, $redirectUrl, null, $linkingIdToken);
     }
 
-    public function signInWithIdpAccessToken($provider, string $accessToken, $redirectUrl = null, ?string $oauthTokenSecret = null, ?string $linkingIdToken = null): SignInResult
+    public function signInWithAppleIdToken(string $idToken, ?string $rawNonce = null, ?string $redirectUrl = null, ?string $linkingIdToken = null): SignInResult
+    {
+        return $this->signInWithIdpIdToken(Provider::APPLE, $idToken, $redirectUrl, $linkingIdToken, $rawNonce);
+    }
+
+    public function signInWithIdpAccessToken($provider, string $accessToken, $redirectUrl = null, ?string $oauthTokenSecret = null, ?string $linkingIdToken = null, ?string $rawNonce = null): SignInResult
     {
         $provider = $provider instanceof Provider ? (string) $provider : $provider;
         $redirectUrl = $redirectUrl ?? 'http://localhost';
@@ -618,6 +623,10 @@ class Auth implements Contract\Auth
             $action = $action->withLinkingIdToken($linkingIdToken);
         }
 
+        if ($rawNonce) {
+            $action = $action->withRawNonce($rawNonce);
+        }
+
         if ($redirectUrl) {
             $action = $action->withRequestUri($redirectUrl);
         }
@@ -629,7 +638,7 @@ class Auth implements Contract\Auth
         return $this->signInHandler->handle($action);
     }
 
-    public function signInWithIdpIdToken($provider, $idToken, $redirectUrl = null, ?string $linkingIdToken = null): SignInResult
+    public function signInWithIdpIdToken($provider, $idToken, $redirectUrl = null, ?string $linkingIdToken = null, ?string $rawNonce = null): SignInResult
     {
         $provider = $provider instanceof Provider ? (string) $provider : $provider;
 
@@ -644,6 +653,10 @@ class Auth implements Contract\Auth
         }
 
         $action = SignInWithIdpCredentials::withIdToken($provider, $idToken);
+
+        if ($rawNonce) {
+            $action = $action->withRawNonce($rawNonce);
+        }
 
         if ($linkingIdToken) {
             $action = $action->withLinkingIdToken($linkingIdToken);
