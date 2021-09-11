@@ -14,7 +14,7 @@ jobs:
     env:
       php-version: '7.4'
       extensions: ctype, dom, grpc, json, mbstring, openssl, xml, zip, zlib
-      key: cache-integration-v3 # can be any string, change to clear the extension cache.
+      key: cache-integration-v4 # can be any string, change to clear the extension cache.
 
     steps:
       - name: Checkout code
