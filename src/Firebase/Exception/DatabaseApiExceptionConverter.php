@@ -6,6 +6,7 @@ namespace Kreait\Firebase\Exception;
 
 use Fig\Http\Message\StatusCodeInterface as StatusCode;
 use GuzzleHttp\Exception\ConnectException;
+use GuzzleHttp\Exception\GuzzleException;
 use GuzzleHttp\Exception\RequestException;
 use Kreait\Firebase\Exception\Database\ApiConnectionFailed;
 use Kreait\Firebase\Exception\Database\DatabaseError;
@@ -30,7 +31,8 @@ class DatabaseApiExceptionConverter
 
     public function convertException(Throwable $exception): DatabaseException
     {
-        if ($exception instanceof RequestException) {
+        /* @phpstan-ignore-next-line */
+        if ($exception instanceof RequestException && !($exception instanceof ConnectException)) {
             return $this->convertGuzzleRequestException($exception);
         }
 

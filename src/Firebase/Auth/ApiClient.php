@@ -13,7 +13,6 @@ use Kreait\Firebase\Exception\Auth\UserDisabled;
 use Kreait\Firebase\Exception\AuthApiExceptionConverter;
 use Kreait\Firebase\Exception\AuthException;
 use Kreait\Firebase\Exception\FirebaseException;
-use Kreait\Firebase\Http\WrappedGuzzleClient;
 use Kreait\Firebase\Request;
 use Kreait\Firebase\Value\Provider;
 use Psr\Http\Message\ResponseInterface;
@@ -22,9 +21,11 @@ use Throwable;
 /**
  * @internal
  */
-class ApiClient implements ClientInterface
+class ApiClient implements
 {
-    use WrappedGuzzleClient;
+
+    /** @var ClientInterface */
+    private $client;
 
     /** @var TenantId|null */
     private $tenantId;
@@ -216,7 +217,7 @@ class ApiClient implements ClientInterface
         }
 
         try {
-            return $this->request('POST', $uri, $options);
+            return $this->client->request('POST', $uri, $options);
         } catch (Throwable $e) {
             throw $this->errorHandler->convertException($e);
         }

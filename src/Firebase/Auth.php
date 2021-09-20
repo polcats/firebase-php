@@ -7,6 +7,7 @@ namespace Kreait\Firebase;
 use Firebase\Auth\Token\Domain\Generator as TokenGenerator;
 use Firebase\Auth\Token\Domain\Verifier;
 use Firebase\Auth\Token\Exception\InvalidToken;
+use GuzzleHttp\ClientInterface;
 use Kreait\Firebase\Auth\ActionCodeSettings;
 use Kreait\Firebase\Auth\ActionCodeSettings\ValidatedActionCodeSettings;
 use Kreait\Firebase\Auth\ApiClient;
@@ -51,6 +52,9 @@ class Auth implements Contract\Auth
     /** @var TokenGenerator */
     private $tokenGenerator;
 
+    /** @var ClientInterface */
+    private $httpClient;
+
     /** @var Verifier */
     private $idTokenVerifier;
 
@@ -61,7 +65,7 @@ class Auth implements Contract\Auth
     private $tenantId;
 
     /**
-     * @param iterable<ApiClient|TokenGenerator|Verifier|SignInHandler>|ApiClient|TokenGenerator|Verifier|SignInHandler|TenantId|null ...$x
+     * @param iterable<ApiClient|ClientInterface|TokenGenerator|Verifier|SignInHandler|null>|ApiClient|ClientInterface|TokenGenerator|Verifier|SignInHandler|TenantId|null ...$x
      *
      * @internal
      */
@@ -78,6 +82,8 @@ class Auth implements Contract\Auth
                 $this->signInHandler = $arg;
             } elseif ($arg instanceof TenantId) {
                 $this->tenantId = $arg;
+            } elseif ($arg instanceof ClientInterface) {
+                $this->httpClient = $arg;
             }
         }
     }
@@ -249,7 +255,7 @@ class Auth implements Contract\Auth
 
         $tenantId = $this->tenantId ? $this->tenantId->toString() : null;
 
-        return (new CreateActionLink\GuzzleApiClientHandler($this->client))
+        return (new CreateActionLink\GuzzleApiClientHandler($this->httpClient))
             ->handle(CreateActionLink::new($type, $email, $actionCodeSettings, $tenantId));
     }
 
@@ -296,7 +302,7 @@ class Auth implements Contract\Auth
             $sendAction = $sendAction->withIdTokenString($idToken);
         }
 
-        (new SendActionLink\GuzzleApiClientHandler($this->client))->handle($sendAction);
+        (new SendActionLink\GuzzleApiClientHandler($this->httpClient))->handle($sendAction);
     }
 
     public function getEmailVerificationLink($email, $actionCodeSettings = null): string
