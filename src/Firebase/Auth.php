@@ -65,7 +65,7 @@ class Auth implements Contract\Auth
     private $tenantId;
 
     /**
-     * @param iterable<ApiClient|ClientInterface|TokenGenerator|Verifier|SignInHandler|null>|ApiClient|ClientInterface|TokenGenerator|Verifier|SignInHandler|TenantId|null ...$x
+     * @param iterable<ApiClient|ClientInterface|TokenGenerator|Verifier|SignInHandler|TenantId|null>|ApiClient|ClientInterface|TokenGenerator|Verifier|SignInHandler|TenantId|null ...$x
      *
      * @internal
      */
