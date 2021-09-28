@@ -1,7 +1,13 @@
 {
-    "name": "polcats/firebase-php",
+    "name": "kreait/firebase-php",
     "description": "Firebase Admin SDK",
-    "keywords": ["firebase", "google", "sdk", "api", "database"],
+    "keywords": [
+        "firebase",
+        "google",
+        "sdk",
+        "api",
+        "database"
+    ],
     "homepage": "https://github.com/kreait/firebase-php",
     "license": "MIT",
     "authors": [
@@ -25,9 +31,6 @@
         "google/auth": "^1.8",
         "google/cloud-core": "^1.36",
         "google/cloud-storage": "^1.14",
-        "guzzlehttp/guzzle": "^6.2.1|^7.0",
-        "guzzlehttp/promises": "^1.4",
-        "guzzlehttp/psr7": "^1.7",
         "kreait/clock": "^1.0.1",
         "kreait/firebase-tokens": "^1.15.0",
         "mtdowling/jmespath.php": "^2.3",
