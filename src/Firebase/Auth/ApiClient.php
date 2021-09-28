@@ -21,7 +21,7 @@ use Throwable;
 /**
  * @internal
  */
-class ApiClient implements
+class ApiClient
 {
 
     /** @var ClientInterface */
